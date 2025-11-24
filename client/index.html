@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Collaborative Drawing + Chat</title>
+
+<link rel="stylesheet" href="style.css">  
+<script src="https://cdn.jsdelivr.net/npm/p5@2.1.1/lib/p5.min.js"></script> 
+</head>
+
+<body>
+
+ 
+<!-- Drawing board -->
+<div id="drawPanel">
+    <h2>✏ Draw With Your Friends!</h2>
+
+    <div class="toolbar">
+        <label>Color:</label>
+        <input type="color" id="brushColorPicker" value="#ff0000">
+
+        <label style="margin-left:10px;">Size:</label>
+        <input type="range" id="brushSize" min="1" max="30" value="4">
+
+        <button id="eraserBtn">Eraser</button>           <!-- Switch to eraser mode -->
+        <button id="penBtn">Pen</button>                 <!-- Switch to pen mode -->
+        <button id="clearCanvasBtn" class="clearBtn">Clear Canvas</button> <!-- Clear board -->
+    </div>
+
+    <div id="drawCanvas"></div> <!-- p5.js will create canvas here -->
+</div>
+
+
+
+  <!-- Chat window -->
+<div id="chatPanel">
+    <h2>💬 Chat</h2>
+
+    <div id="messages"></div>   <!-- Chat messages appear here -->
+
+    <div class="chatInput">
+        <input id="clientName" placeholder="Your name" style="width: 80px;"> <!-- Username -->
+        <input id="msgInput" placeholder="Type message...">                <!-- Message field -->
+        <button id="sendBtn">Send</button>                                 <!-- Send message -->
+        <button id="clearChatBtn" class="clearBtn">Clear Chat</button>     <!-- Clear chat -->
+    </div>
+</div>
+
+
+<script>
+
+let ws;                    // WebSocket connection
+let currentMode = 'pen';   // Current tool mode: pen or eraser
+let p5Instance;            // Reference to p5 instance
+
+
+ws = new WebSocket('ws://localhost:3000');
+
+
+function drawingSketch(p) {
+
+    p5Instance = p;  // Store instance globally
+
+    p.setup = function () {
+        // Create canvas and attach to container
+        const canvas = p.createCanvas(750, 600);
+        canvas.parent("drawCanvas");
+
+        // Default background color
+        p.background(230);
+    };
+
+    //packaging all the information
+    p.mouseDragged = function () {
+        // Read brush settings from UI
+        const brushColor = document.getElementById("brushColorPicker").value;
+        const brushSize  = document.getElementById("brushSize").value;
+
+        // If using pen mode
+        if(currentMode === 'pen') {
+
+            // Draw locally
+            drawLine(p, p.pmouseX, p.pmouseY, p.mouseX, p.mouseY, brushColor, brushSize);
+
+            // Send drawing data to server
+            ws.send(JSON.stringify({
+                type: 'draw',
+                px: p.pmouseX, py: p.pmouseY,
+                x: p.mouseX,  y: p.mouseY,
+                color: brushColor,
+                size: brushSize
+            }));
+        }
+
+        // If using eraser mode
+        else if(currentMode === 'eraser') {
+            drawLine(p, p.pmouseX, p.pmouseY, p.mouseX, p.mouseY, 230, brushSize);
+
+            // Notify server that erasing occurred
+            ws.send(JSON.stringify({
+                type: 'erase',
+                px: p.pmouseX, py: p.pmouseY,
+                x: p.mouseX,  y: p.mouseY,
+                size: brushSize
+            }));
+        }
+    };
+}
+
+// Create p5 instance
+new p5(drawingSketch);
+
+
+
+// DRAWING HELPER FUNCTION
+function drawLine(p, px, py, x, y, color, size) {
+    p.stroke(color);
+    p.strokeWeight(size);
+    p.line(px, py, x, y);
+}
+
+
+
+// HANDLE INCOMING SERVER MESSAGES
+ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    const p = p5Instance;
+
+    if(!p) return;
+
+    if(msg.type === 'draw')
+        drawLine(p, msg.px, msg.py, msg.x, msg.y, msg.color, msg.size);
+
+    if(msg.type === 'erase')
+        drawLine(p, msg.px, msg.py, msg.x, msg.y, 230, msg.size);
+
+    if(msg.type === 'chat')
+        appendMessage(msg.name, msg.text);
+
+    if(msg.type === 'clearCanvas')
+        p.background(230);
+
+    if(msg.type === 'clearChat')
+        document.getElementById('messages').innerHTML = '';
+};
+
+
+
+// Buttons
+
+// Switch to eraser
+document.getElementById('eraserBtn').onclick = () => {
+    currentMode = 'eraser';
+};
+
+// Switch to pen
+document.getElementById('penBtn').onclick = () => {
+    currentMode = 'pen';
+};
+
+// Send chat message
+document.getElementById('sendBtn').onclick = sendChat;
+
+// Clear drawing canvas locally and broadcast
+document.getElementById('clearCanvasBtn').onclick = () => {
+    p5Instance.background(230);
+    ws.send(JSON.stringify({ type: 'clearCanvas' }));
+};
+
+// Clear chat locally and broadcast
+document.getElementById('clearChatBtn').onclick = () => {
+    document.getElementById('messages').innerHTML = '';
+    ws.send(JSON.stringify({ type: 'clearChat' }));
+};
+
+
+
+
+function sendChat() {
+    // Get the user's name from the input field;
+    // if empty, default to "Anonymous"
+    const name = document.getElementById('clientName').value || 'Anonymous';
+
+    // Get the chat message text from the input field
+    const text = document.getElementById('msgInput').value;
+
+    // If the message is empty, do nothing
+    if (!text) return;
+
+    // Create a chat message object to send to the server
+    const msg = { type: 'chat', name, text };
+
+    // Send the message to the server through WebSocket
+    ws.send(JSON.stringify(msg));
+
+    // Clear the input field after sending
+    document.getElementById('msgInput').value = '';
+}
+
+
+
+// ADD MESSAGE TO CHAT WINDOW
+function appendMessage(name, text) { 
+    const div = document.createElement('div'); 
+
+    // Set the message content with the sender's name in bold
+    div.innerHTML = `<strong>${name}:</strong> ${text}`; 
+
+    // Add the message element to the message container
+    document.getElementById('messages').appendChild(div); 
+
+    // Automatically scroll to the bottom to show the newest message
+    document.getElementById('messages').scrollTop = 
+        document.getElementById('messages').scrollHeight; 
+}
+
+
+
+</script>
+</body>
+</html>
